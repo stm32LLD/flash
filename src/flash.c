@@ -465,7 +465,6 @@ flash_status_t flash_erase(const uint32_t addr, const uint32_t size)
     if  (   ( true == gb_is_init )
         &&  (( addr >= FLASH_CFG_START_ADDR ) && ( size <= FLASH_CFG_SIZE_BYTE )))
     {
-
         #if ( 0 == FLASH_CFG_DUAL_BANK_MODE_EN )
 
             // Single bank operation

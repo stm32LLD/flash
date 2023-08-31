@@ -28,11 +28,33 @@
 #include "flash.h"
 #include "../../flash_cfg.h"
 
-
 ////////////////////////////////////////////////////////////////////////////////
 // Definitions
 ////////////////////////////////////////////////////////////////////////////////
 
+#if ( 1 == FLASH_CFG_DUAL_BANK_MODE_EN )
+
+    /**
+     *  Bank data structure
+     */
+    typedef struct
+    {
+        uint32_t addr;  /**<Address */
+        uint32_t size;  /**<Size of data from address */
+    } flash_bank_data_t;
+
+    /**
+     *  Bank enumerations
+     */
+    enum
+    {
+        eFLASH_BANK_1 = 0,
+        eFLASH_BANK_2,
+
+        eFLASH_BANK_NUM_OF
+    };
+
+#endif // ( 1 == FLASH_CFG_DUAL_BANK_MODE_EN )
 
 ////////////////////////////////////////////////////////////////////////////////
 // Variables
@@ -44,11 +66,29 @@
 static bool gb_is_init = false;
 
 
+#if ( 1 == FLASH_CFG_DUAL_BANK_MODE_EN )
+
+    /**
+     *  Flash base address in dual-bank mode
+     */
+    const uint32_t gu32_flash_base[eFLASH_BANK_NUM_OF] =
+    {
+        [eFLASH_BANK_1] = FLASH_CFG_BANK1_START_ADDR,
+        [eFLASH_BANK_2] = FLASH_CFG_BANK2_START_ADDR,
+    };
+
+#endif
+
 ////////////////////////////////////////////////////////////////////////////////
 // Function prototypes
 ////////////////////////////////////////////////////////////////////////////////
-static uint32_t flash_count_page(const uint32_t addr, const uint32_t size);
+static uint32_t         flash_count_page            (const uint32_t addr, const uint32_t size);
 
+#if ( 0 == FLASH_CFG_DUAL_BANK_MODE_EN )
+    static flash_status_t   flash_erase_single_bank     (const uint32_t addr, const uint32_t size);
+#else
+    static flash_status_t   flash_erase_dual_bank       (const uint32_t addr, const uint32_t size);
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 // Functions
@@ -77,6 +117,133 @@ static uint32_t flash_count_page(const uint32_t addr, const uint32_t size)
     return sector_count;
 }
 
+#if ( 0 == FLASH_CFG_DUAL_BANK_MODE_EN )
+
+    ////////////////////////////////////////////////////////////////////////////////
+    /**
+    *       Erase flash memory in single bank configuration
+    *
+    * @param[in]    addr        - Start address of memory
+    * @param[in]    size        - Size of memory section in bytes
+    * @return       status      - Status of operation
+    */
+    ////////////////////////////////////////////////////////////////////////////////
+    static flash_status_t flash_erase_single_bank(const uint32_t addr, const uint32_t size)
+    {
+        flash_status_t          status          = eFLASH_OK;
+        FLASH_EraseInitTypeDef  flash_erase     = {0};
+        uint32_t                sector_error    = 0U;
+
+        // Calculate start page
+        const uint32_t start_page = (uint32_t)(( addr - FLASH_BASE ) / FLASH_CFG_PAGE_SIZE_BYTE );
+
+        // Calcualte number of pages
+        const uint32_t num_of_pages = flash_count_page( addr, size );
+
+        FLASH_ASSERT( num_of_pages <= FLASH_PAGE_NB );
+
+        // Setup flash erase
+        flash_erase.TypeErase   = FLASH_TYPEERASE_PAGES;
+        flash_erase.Page        = start_page;
+        flash_erase.NbPages     = num_of_pages;
+        flash_erase.Banks       = FLASH_BANK_1;
+
+        // Erase flash
+        if( HAL_OK != HAL_FLASHEx_Erase( &flash_erase, &sector_error ))
+        {
+            status = false;
+        }
+
+        return status;
+    }
+
+#endif
+
+#if ( 1 == FLASH_CFG_DUAL_BANK_MODE_EN )
+
+    ////////////////////////////////////////////////////////////////////////////////
+    /**
+    *       Erase flash memory in dual bank configuration
+    *
+    * @param[in]    addr        - Start address of memory
+    * @param[in]    size        - Size of memory section in bytes
+    * @return       status      - Status of operation
+    */
+    ////////////////////////////////////////////////////////////////////////////////
+    static flash_status_t flash_erase_dual_bank(const uint32_t addr, const uint32_t size)
+    {
+        flash_status_t          status                          = eFLASH_OK;
+        FLASH_EraseInitTypeDef  flash_erase                     = {0};
+        flash_bank_data_t       bank_data[eFLASH_BANK_NUM_OF]   = {0};
+        uint32_t                sector_error                    = 0U;
+
+        // Address starts in bank 1
+        if ( addr < FLASH_CFG_BANK2_START_ADDR )
+        {
+            bank_data[eFLASH_BANK_1].addr = addr;
+
+            // Single bank operation
+            if (( addr + size ) < FLASH_CFG_BANK2_START_ADDR )
+            {
+                bank_data[eFLASH_BANK_1].size = size;
+            }
+
+            // Dual-bank operation
+            else
+            {
+                bank_data[eFLASH_BANK_1].size = ( FLASH_CFG_BANK2_START_ADDR - addr );
+
+                bank_data[eFLASH_BANK_2].addr = FLASH_CFG_BANK2_START_ADDR;
+                bank_data[eFLASH_BANK_2].size = ( size - bank_data[eFLASH_BANK_1].size );
+            }
+        }
+
+        // Address start in bank 2 -> single bank operation
+        else
+        {
+            bank_data[eFLASH_BANK_2].addr = addr;
+            bank_data[eFLASH_BANK_2].size = size;
+        }
+
+        // Perform erase opration by bank
+        for ( uint8_t bank = 0; bank < eFLASH_BANK_NUM_OF; bank++ )
+        {
+            // Anything to do?
+            if ( bank_data[bank].size > 0 )
+            {
+                // Calculate start page
+                const uint32_t start_page = (uint32_t)(( bank_data[bank].addr - gu32_flash_base[bank] ) / FLASH_CFG_PAGE_SIZE_BYTE );
+
+                // Calcualte number of pages
+                const uint32_t num_of_pages = flash_count_page( bank_data[bank].addr, bank_data[bank].size );
+
+                FLASH_ASSERT( num_of_pages <= FLASH_PAGE_NB );
+
+                // Mass erase if all pages in bank needs to be erased
+                flash_erase.TypeErase = ((num_of_pages == FLASH_PAGE_NB) ? FLASH_TYPEERASE_MASSERASE : FLASH_TYPEERASE_PAGES );
+
+                // Select bank
+                flash_erase.Banks = (( bank == eFLASH_BANK_1 ) ? FLASH_BANK_1 : FLASH_BANK_2 );
+
+                // Only if page type erase
+                if ( FLASH_TYPEERASE_PAGES == flash_erase.TypeErase  )
+                {
+                    flash_erase.Page        = start_page;
+                    flash_erase.NbPages     = num_of_pages;
+                }
+
+                // Erase flash
+                if( HAL_OK != HAL_FLASHEx_Erase( &flash_erase, &sector_error ))
+                {
+                    status = false;
+                }
+            }
+        }
+
+        return status;
+    }
+
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 /**
@@ -288,30 +455,9 @@ flash_status_t flash_read(const uint32_t addr, const uint32_t size, uint8_t * co
 * @return       status      - Status of operation
 */
 ////////////////////////////////////////////////////////////////////////////////
-
-
-typedef struct
-{
-    uint32_t addr;  /**<Address */
-    uint32_t size;  /**<Size of data from address */
-} flash_bank_data_t;
-
-enum
-{
-    eFLASH_BANK_1 = 0,
-    eFLASH_BANK_2,
-
-    eFLASH_BANK_NUM_OF
-};
-
-
-
-
 flash_status_t flash_erase(const uint32_t addr, const uint32_t size)
 {
-    flash_status_t          status          = eFLASH_OK;
-    uint32_t                sector_error    = 0U;
-    FLASH_EraseInitTypeDef  flash_erase     = {0};
+    flash_status_t status = eFLASH_OK;
 
     FLASH_ASSERT( true == gb_is_init );
     FLASH_ASSERT(( addr >= FLASH_CFG_START_ADDR ) && ( size <= FLASH_CFG_SIZE_BYTE ));
@@ -319,106 +465,16 @@ flash_status_t flash_erase(const uint32_t addr, const uint32_t size)
     if  (   ( true == gb_is_init )
         &&  (( addr >= FLASH_CFG_START_ADDR ) && ( size <= FLASH_CFG_SIZE_BYTE )))
     {
-        // Single bank operation
+
         #if ( 0 == FLASH_CFG_DUAL_BANK_MODE_EN )
 
-        // Calculate start page
-        const uint32_t start_page = (uint32_t)(( addr - FLASH_BASE ) / FLASH_CFG_PAGE_SIZE_BYTE );
+            // Single bank operation
+            status = flash_erase_single_bank( addr, size );
 
-        // Calcualte number of pages
-        const uint32_t num_of_pages = flash_count_page( addr, size );
-
-        FLASH_ASSERT( num_of_pages <= FLASH_PAGE_NB );
-
-        // Setup flash erase
-        flash_erase.TypeErase   = FLASH_TYPEERASE_PAGES;
-        flash_erase.Page        = start_page;
-        flash_erase.NbPages     = num_of_pages;
-        flash_erase.Banks       = FLASH_BANK_1;
-
-        // Erase flash
-        if( HAL_OK != HAL_FLASHEx_Erase( &flash_erase, &sector_error ))
-        {
-            status = false;
-        }
-
-        // Dual-bank operation
         #else
 
-
-        flash_bank_data_t g_bank_data[eFLASH_BANK_NUM_OF] = {0};
-
-        // Calculate data for each bank
-
-        // Address starts in bank 1
-        if ( addr < FLASH_CFG_BANK2_START_ADDR )
-        {
-            g_bank_data[eFLASH_BANK_1].addr = addr;
-
-            // Single bank operation
-            if (( addr + size ) < FLASH_CFG_BANK2_START_ADDR )
-            {
-                g_bank_data[eFLASH_BANK_1].size = size;
-            }
-
             // Dual-bank operation
-            else
-            {
-                g_bank_data[eFLASH_BANK_1].size = ( FLASH_CFG_BANK2_START_ADDR - addr );
-
-                g_bank_data[eFLASH_BANK_2].addr = FLASH_CFG_BANK2_START_ADDR;
-                g_bank_data[eFLASH_BANK_2].size = ( size - g_bank_data[eFLASH_BANK_1].size );
-            }
-        }
-
-        // Address start in bank 2 -> single bank operation
-        else
-        {
-            g_bank_data[eFLASH_BANK_2].addr = addr;
-            g_bank_data[eFLASH_BANK_2].size = size;
-        }
-
-        // TODO: Remove out!
-        const uint32_t flash_base[eFLASH_BANK_NUM_OF] =
-        {
-            [eFLASH_BANK_1] = FLASH_CFG_BANK1_START_ADDR,
-            [eFLASH_BANK_2] = FLASH_CFG_BANK2_START_ADDR,
-        };
-
-
-        for ( uint8_t bank = 0; bank < eFLASH_BANK_NUM_OF; bank++ )
-        {
-            // Anything to do?
-            if ( g_bank_data[bank].size > 0 )
-            {
-                // Calculate start page
-                const uint32_t start_page = (uint32_t)(( g_bank_data[bank].addr - flash_base[bank] ) / FLASH_CFG_PAGE_SIZE_BYTE );
-
-                // Calcualte number of pages
-                const uint32_t num_of_pages = flash_count_page( g_bank_data[bank].addr, g_bank_data[bank].size );
-
-                FLASH_ASSERT( num_of_pages <= FLASH_PAGE_NB );
-
-                // Mass erase if all pages in bank needs to be erased
-                flash_erase.TypeErase   = ((num_of_pages == FLASH_PAGE_NB) ? FLASH_TYPEERASE_MASSERASE : FLASH_TYPEERASE_PAGES );
-
-                // Select bank
-                flash_erase.Banks = (( bank == eFLASH_BANK_1 ) ? FLASH_BANK_1 : FLASH_BANK_2 );
-
-                // Only if page type erase
-                if ( FLASH_TYPEERASE_PAGES == flash_erase.TypeErase  )
-                {
-                    flash_erase.Page        = start_page;
-                    flash_erase.NbPages     = num_of_pages;
-                }
-
-                // Erase flash
-                if( HAL_OK != HAL_FLASHEx_Erase( &flash_erase, &sector_error ))
-                {
-                    status = false;
-                }
-            }
-        }
+            status = flash_erase_dual_bank( addr, size );
 
         #endif
     }

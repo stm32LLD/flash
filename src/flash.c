@@ -134,19 +134,49 @@ static uint32_t flash_count_page(const uint32_t addr, const uint32_t size)
         FLASH_EraseInitTypeDef  flash_erase     = {0};
         uint32_t                sector_error    = 0U;
 
-        // Calculate start page
-        const uint32_t start_page = (uint32_t)(( addr - FLASH_BASE ) / FLASH_CFG_PAGE_SIZE_BYTE );
+// On STM32L4/G4 flash pages are used when erasing
+#if defined(STM32L4) || defined(STM32G4)
 
-        // Calcualte number of pages
-        const uint32_t num_of_pages = flash_count_page( addr, size );
+            // Calculate start page
+            const uint32_t start_page = (uint32_t)(( addr - FLASH_BASE ) / FLASH_CFG_PAGE_SIZE_BYTE );
 
-        FLASH_ASSERT( num_of_pages <= FLASH_PAGE_NB );
+            // Calculate number of pages
+            const uint32_t num_of_pages = flash_count_page( addr, size );
 
-        // Setup flash erase
-        flash_erase.TypeErase   = FLASH_TYPEERASE_PAGES;
-        flash_erase.Page        = start_page;
-        flash_erase.NbPages     = num_of_pages;
-        flash_erase.Banks       = FLASH_BANK_1;
+            FLASH_ASSERT( num_of_pages <= FLASH_PAGE_NB );
+
+            // Setup flash erase
+            flash_erase.TypeErase   = FLASH_TYPEERASE_PAGES;
+            flash_erase.Page        = start_page;
+            flash_erase.NbPages     = num_of_pages;
+
+// On STM32H7 flash sectors are used when erasing
+#elif defined(STM32H7)
+
+            // Calculate start page
+            const uint32_t start_sector = (uint32_t)(( addr - FLASH_BASE ) / FLASH_CFG_PAGE_SIZE_BYTE );
+
+            // calculate number of sectors
+            const uint32_t num_of_sectors = flash_count_page( addr, size );
+
+            FLASH_ASSERT( num_of_sectors <= FLASH_SECTOR_TOTAL );
+
+            // Setup flash erase
+            flash_erase.TypeErase   = FLASH_TYPEERASE_SECTORS;
+            flash_erase.Sector      = start_sector;
+            flash_erase.NbSectors   = num_of_sectors;
+
+            // TODO: Check this options
+            //flash_erase.VoltageRange   = FLASH_VOLTAGE_RANGE_1;
+            //#define FLASH_VOLTAGE_RANGE_1        0x00000000U       /*!< Flash program/erase by 8 bits  */
+            //#define FLASH_VOLTAGE_RANGE_2        FLASH_CR_PSIZE_0  /*!< Flash program/erase by 16 bits */
+            //#define FLASH_VOLTAGE_RANGE_3        FLASH_CR_PSIZE_1  /*!< Flash program/erase by 32 bits */
+            //#define FLASH_VOLTAGE_RANGE_4        FLASH_CR_PSIZE    /*!< Flash program/erase by 64 bits */
+
+#endif
+
+        // Single bank operation
+        flash_erase.Banks = FLASH_BANK_1;
 
         // Erase flash
         if( HAL_OK != HAL_FLASHEx_Erase( &flash_erase, &sector_error ))
@@ -274,7 +304,9 @@ flash_status_t flash_init(void)
     if ( false == gb_is_init )
     {
         // Enable flash clock
+#if defined(STM32L4) || defined(STM32G4)
         __HAL_RCC_FLASH_CLK_ENABLE();
+#endif
 
         // Wait for flash to be ready
         while(__HAL_FLASH_GET_FLAG(FLASH_FLAG_BSY) != RESET);
@@ -315,7 +347,9 @@ flash_status_t flash_deinit(void)
         else
         {
             // Disable flash clock
+#if defined(STM32L4) || defined(STM32G4)
             __HAL_RCC_FLASH_CLK_DISABLE();
+#endif
 
             // De-init success
             gb_is_init = false;
@@ -387,7 +421,11 @@ flash_status_t flash_write(const uint32_t addr, const uint32_t size, const uint8
             memcpy( &flash_data, &p_data[dword], sizeof( uint64_t ));
 
             // Program flash
+#if defined(STM32L4) || defined(STM32G4)
             if ( HAL_OK != HAL_FLASH_Program( FLASH_TYPEPROGRAM_DOUBLEWORD, flash_addr, flash_data ))
+#elif defined(STM32H7)
+            if ( HAL_OK != HAL_FLASH_Program( 0, flash_addr, flash_data )) // For single bank operation "type_program" is not being used!
+#endif
             {
                 status = eFLASH_ERROR;
                 break;

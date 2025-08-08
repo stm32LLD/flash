@@ -629,7 +629,6 @@ flash_status_t flash_erase(const uint32_t addr, const uint32_t size)
  */
 flash_status_t flash_write(const uint32_t addr, const uint32_t size, const uint8_t * const p_data)
 {
-    flash_status_t status = eFLASH_ERROR;
     uint32_t address_offset = 0;
 
     // --- Step 1: Perform alignment checks ---
@@ -641,12 +640,6 @@ flash_status_t flash_write(const uint32_t addr, const uint32_t size, const uint8
     // The size of the data to be written must also be a multiple of 32 bytes.
     if ((size % 32) != 0) {
         return eFLASH_ERROR;
-    }
-
-    // --- Step 2: Erase the target region first ---
-    status = flash_erase(addr, size);
-    if (status != eFLASH_OK) {
-        return status;
     }
 
     // --- Step 3: Unlock Flash memory for writing ---

@@ -414,7 +414,7 @@ flash_status_t flash_write(const uint32_t addr, const uint32_t size, const uint8
                 const uint32_t flash_addr = ( addr + dword );
 
                 // Copy data
-                const uint64_t flash_data = 0UL;
+                uint64_t flash_data = 0UL;
                 memcpy( &flash_data, &p_data[dword], sizeof( uint64_t ));
 
                 // Program flash with 8 bytes
